@@ -1,4 +1,10 @@
 import forti_api_tools
 
-forti_api_tools.get_json\
-    ()
+host = "1.85.4.4"
+
+key = "asdfadsf"
+tools = forti_api_tools.fnt_tools(host, key)
+
+routes = tools.routes()
+
+print (routes.static_routes)

@@ -7,11 +7,13 @@ import json
 from datetime import datetime
 from pprint import pprint
 import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) # disable security warning for SSL certificate
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)  # disable security warning for SSL certificate
 # import logging
 # logging.captureWarnings(True)
 
 __version__ = "0.1.0"
+
 
 class FGT(object):
     """
@@ -22,8 +24,10 @@ class FGT(object):
     key (string): API Key of firewall
     hostname (string): Hostname of firewall. Only used for config backup filename
     """
-    def __init__(self, host, key, hostname):
+
+    def __init__(self, host, key, hostname=None):
         self.host = host
+        self.key = key
         self.url_prefix = "https://" + self.host + '/api/v2/'
         self.token = {'Authorization': f'Bearer {key}'}
         self.hostname = hostname
@@ -42,7 +46,7 @@ class FGT(object):
         string: JSON response of GET request
         '''
         url = self.url_prefix + url
-        res=None
+        res = None
         try:
             res = requests.get(
                 url,
@@ -84,7 +88,7 @@ class FGT(object):
         except requests.exceptions.RequestException as e:
             print(e)
             exit()
-        return check_response(res,False)
+        return check_response(res, False)
 
     def put(self, url, **params):
         '''
@@ -115,7 +119,7 @@ class FGT(object):
         except requests.exceptions.RequestException as e:
             print(e)
             exit()
-        return check_response(res,False)
+        return check_response(res, False)
 
     def delete(self, url, **params):
         '''
@@ -146,7 +150,7 @@ class FGT(object):
         except requests.exceptions.RequestException as e:
             print(e)
             exit()
-        return check_response(res,False)
+        return check_response(res, False)
 
     def backup(self):
         '''
@@ -156,13 +160,15 @@ class FGT(object):
         bool: Returns True if successful, else False
         '''
         now = datetime.now()
-        filename = self.hostname + "_" + str(now.year) + str(now.month).zfill(2) + str(now.day).zfill(2) + "_" + str(now.hour).zfill(2) + str(now.minute).zfill(2) + ".conf"
+        filename = self.hostname + "_" + str(now.year) + str(now.month).zfill(2) + str(now.day).zfill(2) + "_" + str(
+            now.hour).zfill(2) + str(now.minute).zfill(2) + ".conf"
         if os.path.exists(filename):
-            filename = self.hostname + "_" + str(now.year) + str(now.month).zfill(2) + str(now.day).zfill(2) + "_" + str(now.hour).zfill(2) + str(now.minute).zfill(2) + "_POST.conf"
-        
-        params = {'scope':'global'}
+            filename = self.hostname + "_" + str(now.year) + str(now.month).zfill(2) + str(now.day).zfill(
+                2) + "_" + str(now.hour).zfill(2) + str(now.minute).zfill(2) + "_POST.conf"
+
+        params = {'scope': 'global'}
         url = self.url_prefix + 'monitor/system/config/backup/'
-        res=None
+        res = None
         try:
             res = requests.get(
                 url,
@@ -184,6 +190,114 @@ class FGT(object):
 
         return False
 
+
+##########################################################
+
+# This has been replaced by a method fnt_connector()
+
+class fnt_tools(object):
+    """
+    Class to connect to FortiGate devices
+
+    Depends on FGT class
+
+    Parameters:
+    host: Firewall IP address and Port
+    key: Firewall API Key
+    """
+
+    def __init__(self, host, key):
+        self.host = host
+        self.key = key
+        self.current_firewall = FGT(host, key)
+        #PLEASE TEST ME!
+        self.hostname = self.current_firewall.get(f'cmdb/system/global/hostname') # THIS MAY NOT WORK
+
+    def backup_pre_changes(self):
+        if (self.current_firewall.backup()):
+            print(f'Pre-Operation Config Backup for {self.hostname} successful.')
+        else:  # If pre-operation backup fails, do not make change
+            print(f'Error taking Pre-Operation Config for {self.hostname} backup. No operations performed.')
+
+
+
+    def routes_show(self):
+        # Self.Routes here because I don't want to call information I don't need
+        self.static_routes = self.current_firewall.get('cmdb/router/static/')
+        self.policy_routes = self.current_firewall.get('cmdb/router/policy/')
+        self.ospf_routes = self.current_firewall.get('cmdb/router/ospf/')
+
+    def routes_remove_non_default(self):
+        res = self.current_firewall.get('cmdb/router/static/')
+        res_dict = json.loads(
+            res)  # get returns a JSON string--must convert to a python dictionary--perhaps a good idea to change acutools to return a dictionary instead of the response in the future?
+        # res_dict = {
+        #     "results":[
+        #         {
+        #         "seq-num":1,
+        #         "dst":"0.0.0.0 0.0.0.0",
+        #         "device":"wan1"
+        #         },
+        #         {
+        #         "seq-num":2,
+        #         "dst":"10.0.0.0 255.0.0.0",
+        #         "device":"VPN_OmniPeak10"
+        #         },
+        #         {
+        #         "seq-num":3,
+        #         "dst":"10.0.0.0 255.0.0.0",
+        #         "device":"test2"
+        #         },
+        #         {
+        #         "seq-num":4,
+        #         "dst":"10.0.0.0 255.0.0.0",
+        #         "device":"test3"
+        #         }
+        #     ]
+        # }
+        routes_to_delete = []
+        for route in res_dict["results"]:
+            if route["dst"] != "0.0.0.0 0.0.0.0":
+                routes_to_delete.append(route)
+
+        routes_to_delete.sort(reverse=True, key=returnSeqNum)  # need to sort items in reverse order. When deleting
+        # removing item 2 will likely cause the further routes to "shift up"
+        # in the array, causing their seq-num to change. This would lead to
+        # out-of-bounds errors, potentially deleting the wrong route, etc.
+
+        for route in routes_to_delete:
+            self.current_firewall.delete(f'cmdb/router/static/{route["seq-num"]}')
+            print(f'cmdb/router/static/{route["seq-num"]}')
+            print(route["device"])
+
+
+
+
+##########################################################
+
+"""
+class info_gather(object):
+   
+    Class to make repeatable changes against firewalls
+
+    Parameters:
+    
+
+
+
+    def __init__(self):
+        self.current_firewall = fnt_connector.connector(host, key)
+
+    # Print out static routing table to console
+    def routes(self):
+        print(self.current_firewall)
+        static_routes = self.current_firewall.get('cmdb/router/static/')
+        policy_routes = self.current_firewall.get('cmdb/router/policy/')
+        ospf_routes = self.current_firewall.get('cmdb/router/ospf/')
+
+        return static_routes, ospf_routes, policy_routes
+"""
+
 ##########################################################
 
 # function to retrieve json data from HTTP response (return False if fails)
@@ -199,6 +313,7 @@ def get_json(response):
         return False
     else:
         return rjson
+
 
 # function to check response
 def check_response(res, verbose):
@@ -226,3 +341,6 @@ def check_response(res, verbose):
         else:
             print(status, "Unknown error")
         return False
+
+def returnSeqNum(e):
+    return e["seq-num"]
